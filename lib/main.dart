@@ -1,125 +1,318 @@
-import 'package:flutter/material.dart';
+import 'dart:convert';
+import 'dart:io';
 
-void main() {
-  runApp(const MyApp());
+import 'package:desktop_drop/desktop_drop.dart';
+import 'package:file_picker/file_picker.dart';
+import 'package:flutter/cupertino.dart';
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:media_kit/media_kit.dart';
+import 'package:media_kit_video/media_kit_video.dart';
+
+var scaffoldKey = GlobalKey<ScaffoldState>();
+
+class TV {
+  const TV({required this.name, required this.url});
+  final String name;
+  final String url;
 }
 
-class MyApp extends StatelessWidget {
-  const MyApp({super.key});
+class Group {
+  final String name;
+  final List<TV> tvs;
 
-  // This widget is the root of your application.
+  Group({required this.name, this.tvs = const []});
+  addTV(String tvName, String tvUrl) {
+    tvs.add(TV(name: tvName, url: tvUrl));
+  }
+}
+
+class Groups {
+  Map<String, List<TV>> tvs = {};
+  addTv(String groupName, String tvName, String tvUrl) {
+    if (!tvs.containsKey(groupName)) {
+      tvs[groupName] = [TV(name: tvName, url: tvUrl)];
+    } else {
+      tvs[groupName]!.add(TV(name: tvName, url: tvUrl));
+    }
+  }
+
+  merge(Groups other) {
+    for (var key in other.tvs.keys) {
+      if (!tvs.containsKey(key)) {
+        tvs[key] = other.tvs[key]!;
+      } else {
+        tvs[key]!.addAll(other.tvs[key]!);
+      }
+    }
+  }
+
+  List<String> get names => tvs.keys.toList();
+}
+
+class TabToggle extends Intent {}
+
+class Loader {
+  static final urlReg = RegExp(
+      r'(((ht|f)tps?):\/\/)?([^!@#$%^&*?.\s-]([^!@#$%^&*?.\s]{0,63}[^!@#$%^&*?.\s])?\.)+[a-z]{2,6}\/?');
+  static Groups parse(String rawText) {
+    var lines = rawText.split("\n");
+    var groups = Groups();
+    var currKey = "";
+    for (var line in lines) {
+      line = line.trim();
+      if (line.isEmpty) {
+        currKey = "";
+        continue;
+      }
+      var cxx = line.split(",");
+      if (!urlReg.hasMatch(line) && currKey.isEmpty) {
+        currKey = cxx[0];
+        continue;
+      }
+      if (currKey.isEmpty || cxx.length != 2) continue;
+      groups.addTv(currKey, cxx[0], cxx[1]);
+    }
+    return groups;
+  }
+}
+
+void main() {
+  WidgetsFlutterBinding.ensureInitialized();
+  MediaKit.ensureInitialized();
+  runApp(const Itv());
+}
+
+class Itv extends StatelessWidget {
+  const Itv({super.key});
+
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Flutter Demo',
+      title: 'Itv',
+      debugShowCheckedModeBanner: false,
       theme: ThemeData(
-        // This is the theme of your application.
-        //
-        // TRY THIS: Try running your application with "flutter run". You'll see
-        // the application has a purple toolbar. Then, without quitting the app,
-        // try changing the seedColor in the colorScheme below to Colors.green
-        // and then invoke "hot reload" (save your changes or press the "hot
-        // reload" button in a Flutter-supported IDE, or press "r" if you used
-        // the command line to start the app).
-        //
-        // Notice that the counter didn't reset back to zero; the application
-        // state is not lost during the reload. To reset the state, use hot
-        // restart instead.
-        //
-        // This works for code too, not just values: Most code changes can be
-        // tested with just a hot reload.
         colorScheme: ColorScheme.fromSeed(seedColor: Colors.deepPurple),
         useMaterial3: true,
       ),
-      home: const MyHomePage(title: 'Flutter Demo Home Page'),
+      home: const RenderPage(),
     );
   }
 }
 
-class MyHomePage extends StatefulWidget {
-  const MyHomePage({super.key, required this.title});
-
-  // This widget is the home page of your application. It is stateful, meaning
-  // that it has a State object (defined below) that contains fields that affect
-  // how it looks.
-
-  // This class is the configuration for the state. It holds the values (in this
-  // case the title) provided by the parent (in this case the App widget) and
-  // used by the build method of the State. Fields in a Widget subclass are
-  // always marked "final".
-
-  final String title;
+class RenderPage extends StatefulWidget {
+  const RenderPage({super.key});
 
   @override
-  State<MyHomePage> createState() => _MyHomePageState();
+  State<RenderPage> createState() => _RenderPageState();
 }
 
-class _MyHomePageState extends State<MyHomePage> {
-  int _counter = 0;
+class _RenderPageState extends State<RenderPage> {
+  bool dragging = false;
+  final Groups groups = Groups();
+  final FocusScopeNode focusNode = FocusScopeNode();
+  var currGroupName = "";
+  List<TV> get currTVS {
+    if (groups.tvs.containsKey(currGroupName)) {
+      return groups.tvs[currGroupName]!;
+    }
+    return [];
+  }
 
-  void _incrementCounter() {
-    setState(() {
-      // This call to setState tells the Flutter framework that something has
-      // changed in this State, which causes it to rerun the build method below
-      // so that the display can reflect the updated values. If we changed
-      // _counter without calling setState(), then the build method would not be
-      // called again, and so nothing would appear to happen.
-      _counter++;
-    });
+  int currTVIdx = -1;
+
+  late final Player player = Player();
+  late final controller = VideoController(player);
+  String realURL = "";
+
+  playURL(String url, {isCloseDrawer = true, isWait = true}) async {
+    if (url.isEmpty) return;
+    realURL = url;
+    setState(() {});
+    player.open(Media(url));
+    if (isCloseDrawer) {
+      if (isWait) await Future.delayed(const Duration(milliseconds: 420));
+      scaffoldKey.currentState?.closeDrawer();
+    }
+  }
+
+  @override
+  void dispose() async {
+    await player.dispose();
+    super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    // This method is rerun every time setState is called, for instance as done
-    // by the _incrementCounter method above.
-    //
-    // The Flutter framework has been optimized to make rerunning build methods
-    // fast, so that you can just rebuild anything that needs updating rather
-    // than having to individually change instances of widgets.
     return Scaffold(
-      appBar: AppBar(
-        // TRY THIS: Try changing the color here to a specific color (to
-        // Colors.amber, perhaps?) and trigger a hot reload to see the AppBar
-        // change color while the other colors stay the same.
-        backgroundColor: Theme.of(context).colorScheme.inversePrimary,
-        // Here we take the value from the MyHomePage object that was created by
-        // the App.build method, and use it to set our appbar title.
-        title: Text(widget.title),
-      ),
-      body: Center(
-        // Center is a layout widget. It takes a single child and positions it
-        // in the middle of the parent.
-        child: Column(
-          // Column is also a layout widget. It takes a list of children and
-          // arranges them vertically. By default, it sizes itself to fit its
-          // children horizontally, and tries to be as tall as its parent.
-          //
-          // Column has various properties to control how it sizes itself and
-          // how it positions its children. Here we use mainAxisAlignment to
-          // center the children vertically; the main axis here is the vertical
-          // axis because Columns are vertical (the cross axis would be
-          // horizontal).
-          //
-          // TRY THIS: Invoke "debug painting" (choose the "Toggle Debug Paint"
-          // action in the IDE, or press "p" in the console), to see the
-          // wireframe for each widget.
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: <Widget>[
-            const Text(
-              'You have pushed the button this many times:',
+      key: scaffoldKey,
+      onDrawerChanged: (flag) {
+        if (!flag) {
+          focusNode.requestFocus();
+        }
+      },
+      drawer: Drawer(
+        width: currTVIdx >= 0 ? 480 : 240,
+        backgroundColor: Colors.transparent,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        child: Padding(
+          padding: const EdgeInsets.all(18.0),
+          child: AnimatedContainer(
+            width: currTVIdx >= 0 ? 480 : 240,
+            decoration: BoxDecoration(
+              color: Colors.white.withOpacity(.72),
+              borderRadius: BorderRadius.circular(12),
             ),
-            Text(
-              '$_counter',
-              style: Theme.of(context).textTheme.headlineMedium,
+            duration: const Duration(milliseconds: 200),
+            child: Row(
+              children: [
+                Expanded(
+                  flex: 3,
+                  child: ListView.builder(
+                    itemCount: groups.names.length,
+                    itemBuilder: (cx, idx) {
+                      var name = groups.names[idx];
+                      var isSelected = currGroupName == name;
+                      return ListTile(
+                        selected: isSelected,
+                        tileColor: isSelected ? Colors.blue : null,
+                        title: Text(name),
+                        onFocusChange: (flag) {
+                          currGroupName = name;
+                          currTVIdx = 0;
+                          setState(() {});
+                          playURL(currTVS[0].url);
+                        },
+                        onTap: () {
+                          currGroupName = name;
+                          currTVIdx = 0;
+                          setState(() {});
+                          playURL(currTVS[0].url, isCloseDrawer: false);
+                        },
+                      );
+                    },
+                  ),
+                ),
+                if (currTVIdx >= 0)
+                  Expanded(
+                    flex: 4,
+                    child: ListView.builder(
+                      itemCount: currTVS.length,
+                      itemBuilder: (cx, idx) {
+                        var tv = currTVS[idx];
+                        var isSelected = currTVIdx == idx;
+                        return ListTile(
+                          selected: isSelected,
+                          selectedColor: isSelected ? Colors.blue : null,
+                          title: Text(tv.name),
+                          onTap: () {
+                            currTVIdx = idx;
+                            setState(() { });
+                            playURL(tv.url);
+                          },
+                        );
+                      },
+                    ),
+                  ),
+              ],
             ),
-          ],
+          ),
         ),
       ),
-      floatingActionButton: FloatingActionButton(
-        onPressed: _incrementCounter,
-        tooltip: 'Increment',
-        child: const Icon(Icons.add),
-      ), // This trailing comma makes auto-formatting nicer for build methods.
+      body: Shortcuts(
+        shortcuts: {
+          const SingleActivator(LogicalKeyboardKey.keyS, meta: true):
+              TabToggle(),
+        },
+        child: Actions(
+          actions: {
+            TabToggle: CallbackAction<TabToggle>(
+              onInvoke: (_) {
+                if (scaffoldKey.currentState?.hasDrawer ?? false) {
+                  scaffoldKey.currentState?.openDrawer();
+                } else {
+                  scaffoldKey.currentState?.closeDrawer();
+                }
+                return null;
+              },
+            ),
+          },
+          child: KeyboardListener(
+            focusNode: focusNode,
+            autofocus: true,
+            child: DecoratedBox(
+              decoration: const BoxDecoration(
+                image: DecorationImage(
+                  image: NetworkImage("http://www.kf666888.cn/api/tvbox/img"),
+                  fit: BoxFit.fill,
+                ),
+              ),
+              child: DropTarget(
+                onDragDone: (detail) async {
+                  var file = detail.files[0];
+                  var cx = await file.readAsString(encoding: utf8);
+                  var table = Loader.parse(cx);
+                  groups.merge(table);
+                  setState(() {});
+                  scaffoldKey.currentState?.openDrawer();
+                },
+                onDragEntered: (detail) {
+                  scaffoldKey.currentState?.closeDrawer();
+                  dragging = true;
+                  setState(() {});
+                },
+                onDragExited: (detail) {
+                  dragging = false;
+                  setState(() {});
+                },
+                child: IndexedStack(
+                  children: [
+                    if (dragging)
+                      Container(
+                        width: double.infinity,
+                        height: double.infinity,
+                        decoration: BoxDecoration(
+                          color: Colors.black.withOpacity(.42),
+                        ),
+                        child: const Center(
+                          child: Text(
+                            "拖拽文件到此处",
+                            style: TextStyle(
+                              fontSize: 32,
+                              color: Colors.red,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ),
+                      ),
+                    if (realURL.isEmpty)
+                      Center(
+                        child: Builder(builder: (context) {
+                          return CupertinoButton.filled(
+                            onPressed: () async {
+                              var result =
+                                  await FilePicker.platform.pickFiles();
+                              if (result == null) return;
+                              File file = File(result.files.single.path!);
+                              var cx = file.readAsStringSync(encoding: utf8);
+                              var table = Loader.parse(cx);
+                              groups.merge(table);
+                              setState(() {});
+                              scaffoldKey.currentState?.openDrawer();
+                            },
+                            child: const Text("打开文件"),
+                          );
+                        }),
+                      )
+                    else
+                      Video(controller: controller),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
     );
   }
 }
