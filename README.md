@@ -1,5 +1,7 @@
 # itv
 
+**[小猫影视](https://github.com/waifu-project/movie) 主线已支持电视直播**
+
 `cmd + s` 显示频道
 
 导入的文件格式(参考 `Loader.parse` 函数):
